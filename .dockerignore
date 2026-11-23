@@ -1,0 +1,7 @@
+.git
+osu/
+bin/
+obj/
+**/bin/
+**/obj/
+RealistikOsu.Performance.Tests/

@@ -1,0 +1,5 @@
+osu/
+bin/
+obj/
+.vs/
+*.user

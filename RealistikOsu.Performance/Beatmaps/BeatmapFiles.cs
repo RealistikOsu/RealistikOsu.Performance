@@ -1,0 +1,135 @@
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
+using osu.Game.Beatmaps;
+using osu.Game.Beatmaps.Formats;
+using osu.Game.IO;
+using osu.Game.Rulesets.Objects.Types;
+
+namespace RealistikOsu.Performance.Beatmaps
+{
+    /// <summary>
+    /// Keeps .osu files on disk, fetching a missing one once however many requests want it, and keeps the
+    /// most recently used parsed maps in memory.
+    /// </summary>
+    public sealed class BeatmapFiles : IDisposable
+    {
+        private readonly string root;
+        private readonly string baseUrl;
+        private readonly HttpClient http;
+        private readonly MemoryCache parsed;
+        private readonly ConcurrentDictionary<int, Lazy<Task>> downloads = new ConcurrentDictionary<int, Lazy<Task>>();
+
+        public BeatmapFiles(string root, string baseUrl, long parsedCacheBytes)
+        {
+            this.root = root;
+            this.baseUrl = baseUrl.TrimEnd('/');
+
+            http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            parsed = new MemoryCache(new MemoryCacheOptions { SizeLimit = parsedCacheBytes });
+        }
+
+        public string PathOf(int beatmapId) => Path.Combine(root, $"{beatmapId}.osu");
+
+        /// <exception cref="HttpRequestException">The map isn't on disk and couldn't be fetched.</exception>
+        public async Task<BeatmapFile> GetAsync(int beatmapId)
+        {
+            string path = PathOf(beatmapId);
+
+            await ensureOnDiskAsync(path, beatmapId).ConfigureAwait(false);
+
+            var info = new System.IO.FileInfo(path);
+            string stamp = $"{beatmapId}:{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+
+            if (parsed.TryGetValue(stamp, out BeatmapFile? cached) && cached != null)
+                return cached;
+
+            BeatmapFile file = await Task.Run(() => parse(path, beatmapId)).ConfigureAwait(false);
+
+            parsed.Set(stamp, file, new MemoryCacheEntryOptions { Size = Math.Max(file.Length, 1), SlidingExpiration = TimeSpan.FromHours(1) });
+            return file;
+        }
+
+        private static BeatmapFile parse(string path, int beatmapId)
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+
+            using var stream = new MemoryStream(bytes);
+            using var reader = new LineBufferedReader(stream);
+
+            var beatmap = Decoder.GetDecoder<Beatmap>(reader).Decode(reader);
+            beatmap.BeatmapInfo.Ruleset = Rulesets.ById(beatmap.BeatmapInfo.Ruleset.OnlineID).RulesetInfo;
+            beatmap.BeatmapInfo.OnlineID = beatmapId;
+
+            int sliders = beatmap.HitObjects.Count(h => h is IHasPath);
+            int spinners = beatmap.HitObjects.Count(h => h is IHasDuration && h is not IHasPath);
+
+            return new BeatmapFile(beatmapId, Convert.ToHexString(MD5.HashData(bytes)), bytes.Length, new FlatWorkingBeatmap(beatmap),
+                beatmap.HitObjects.Count - sliders - spinners, sliders, spinners);
+        }
+
+        /// <summary>
+        /// Fetches the .osu when it isn't on disk, without parsing it.
+        /// </summary>
+        /// <exception cref="HttpRequestException">The map isn't on disk and couldn't be fetched.</exception>
+        public Task EnsureOnDiskAsync(int beatmapId) => ensureOnDiskAsync(PathOf(beatmapId), beatmapId);
+
+        private Task ensureOnDiskAsync(string path, int beatmapId)
+        {
+            if (isUsable(path))
+                return Task.CompletedTask;
+
+            // The download runs as a task of its own, so a caller that goes away doesn't cancel it for the others.
+            return downloads.GetOrAdd(beatmapId, _ => new Lazy<Task>(() => Task.Run(async () =>
+            {
+                try
+                {
+                    await downloadAsync(path, beatmapId).ConfigureAwait(false);
+                }
+                finally
+                {
+                    downloads.TryRemove(beatmapId, out Lazy<Task>? _);
+                }
+            }))).Value;
+        }
+
+        private async Task downloadAsync(string path, int beatmapId)
+        {
+            if (isUsable(path))
+                return;
+
+            Console.WriteLine($"downloading .osu for beatmap {beatmapId}");
+
+            byte[] bytes = await http.GetByteArrayAsync($"{baseUrl}/{beatmapId}").ConfigureAwait(false);
+
+            if (bytes.Length == 0)
+                throw new HttpRequestException($"Empty .osu received for beatmap {beatmapId}.");
+
+            // Written under its own name and moved into place, so a crash can't leave a cut-off file behind.
+            string partial = $"{path}.{Guid.NewGuid():N}.part";
+
+            try
+            {
+                await File.WriteAllBytesAsync(partial, bytes).ConfigureAwait(false);
+                File.Move(partial, path, true);
+            }
+            finally
+            {
+                File.Delete(partial);
+            }
+        }
+
+        private static bool isUsable(string path) => File.Exists(path) && new System.IO.FileInfo(path).Length > 0;
+
+        public void Dispose()
+        {
+            http.Dispose();
+            parsed.Dispose();
+        }
+    }
+}
