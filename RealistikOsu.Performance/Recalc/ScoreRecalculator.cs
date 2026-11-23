@@ -60,19 +60,24 @@ namespace RealistikOsu.Performance.Recalc
         public async Task RecalculateScoreAsync(string table, StableScore score)
         {
             int rx = Variants.RxOfScoresTable(table);
-            var ruleset = Rulesets.ById(score.PlayMode);
+            double pp = 0;
 
-            // Stable scores are scored the classic way, which the Classic mod stands for.
-            var result = await calculator.CalculateAsync(new PlayInput
+            if (!score.DodgeTheBeat)
             {
-                BeatmapId = score.BeatmapId,
-                RulesetId = score.PlayMode,
-                Mods = ModFactory.Create(ruleset, score.Mods, score.ModsJson, score.PlaybackRate, true),
-                MaxCombo = score.MaxCombo,
-                Statistics = StableStatistics.Of(score),
-            }).ConfigureAwait(false);
+                var ruleset = Rulesets.ById(score.PlayMode);
 
-            double pp = Math.Round(result.Pp, 2);
+                // Stable scores are scored the classic way, which the Classic mod stands for.
+                var result = await calculator.CalculateAsync(new PlayInput
+                {
+                    BeatmapId = score.BeatmapId,
+                    RulesetId = score.PlayMode,
+                    Mods = ModFactory.Create(ruleset, score.Mods, score.ModsJson, score.PlaybackRate, true),
+                    MaxCombo = score.MaxCombo,
+                    Statistics = StableStatistics.Of(score),
+                }).ConfigureAwait(false);
+
+                pp = Math.Round(result.Pp, 2);
+            }
 
             if (Math.Abs(pp - score.Pp) < 0.005)
                 return;
@@ -164,11 +169,13 @@ namespace RealistikOsu.Performance.Recalc
             var topPp = (await connection.QueryAsync<double>(
                 $@"SELECT COALESCE(s.pp, 0) FROM {table} s INNER JOIN beatmaps b USING(beatmap_md5)
                 WHERE s.userid = @userId AND s.completed = 3 AND s.play_mode = @mode AND b.ranked IN (3, 2)
+                AND b.dodge_the_beat = 0
                 ORDER BY s.pp DESC LIMIT 100", new { userId, mode }).ConfigureAwait(false)).ToList();
 
             int scoreCount = await connection.ExecuteScalarAsync<int>(
                 $@"SELECT COUNT(s.id) FROM {table} s INNER JOIN beatmaps b USING(beatmap_md5)
-                WHERE s.userid = @userId AND s.completed = 3 AND s.play_mode = @mode AND b.ranked IN (3, 2)",
+                WHERE s.userid = @userId AND s.completed = 3 AND s.play_mode = @mode AND b.ranked IN (3, 2)
+                AND b.dodge_the_beat = 0",
                 new { userId, mode }).ConfigureAwait(false);
 
             int newPp = PerformanceTotals.Weighted(topPp, scoreCount);
@@ -253,10 +260,12 @@ namespace RealistikOsu.Performance.Recalc
 
         private static async Task recalculateStatusesAsync(MySqlConnection connection, string table, int userId, int mode)
         {
+            // A dodge the beat map has its own rule for the best play, which the score servers apply.
             var scores = await connection.QueryAsync<StatusRow>(
-                $@"SELECT id AS Id, beatmap_md5 AS BeatmapMd5, completed AS Completed FROM {table}
-                WHERE userid = @userId AND play_mode = @mode AND completed IN (2, 3)
-                ORDER BY beatmap_md5, pp DESC, id", new { userId, mode }).ConfigureAwait(false);
+                $@"SELECT s.id AS Id, s.beatmap_md5 AS BeatmapMd5, s.completed AS Completed FROM {table} s
+                WHERE s.userid = @userId AND s.play_mode = @mode AND s.completed IN (2, 3)
+                AND NOT EXISTS (SELECT 1 FROM beatmaps b WHERE b.beatmap_md5 = s.beatmap_md5 AND b.dodge_the_beat = 1)
+                ORDER BY s.beatmap_md5, s.pp DESC, s.id", new { userId, mode }).ConfigureAwait(false);
 
             var bests = new List<long>();
             var others = new List<long>();
