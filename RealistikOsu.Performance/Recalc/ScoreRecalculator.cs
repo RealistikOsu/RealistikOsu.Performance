@@ -143,6 +143,13 @@ namespace RealistikOsu.Performance.Recalc
             double pp = Math.Round(calculation.Pp, 2);
             bool rankedMods = LazerMods.IsRanked(score.RulesetId, score.Mods);
 
+            // Over the cap the score keeps no pp, rather than the play restricting its player.
+            if (pp > 0 && await exceedsPpCapAsync(score, pp).ConfigureAwait(false))
+            {
+                Console.WriteLine($"Lazer score ID {score.Id} from user {score.UserId} is {pp}pp, over the cap; leaving it without pp");
+                pp = 0;
+            }
+
             if (Math.Abs(pp - score.Pp) < 0.005 && rankedMods == score.RankedMods)
                 return;
 
@@ -256,6 +263,44 @@ namespace RealistikOsu.Performance.Recalc
             await publishAsync("peppy:update_cached_stats", userId.ToString()).ConfigureAwait(false);
 
             Console.WriteLine($"Recalculated lazer user {userId} in mode {mode} (variant: {variant}) | pp: {newPp}");
+        }
+
+        /// <summary>
+        /// Whether a lazer play is worth more than the cap of its mode and variant, unless its player is whitelisted for it
+        /// or carries the verified badge.
+        /// </summary>
+        private static async Task<bool> exceedsPpCapAsync(LazerScore score, double pp)
+        {
+            using var connection = await DatabaseAccess.GetConnectionAsync().ConfigureAwait(false);
+
+            var limit = await connection.QuerySingleOrDefaultAsync<PpLimit>(
+                @"SELECT CAST(pp AS DOUBLE) AS Pp, CAST(flashlight_pp AS DOUBLE) AS FlashlightPp FROM pp_limits
+                WHERE mode = @mode AND relax = @variant LIMIT 1",
+                new { mode = score.RulesetId, variant = score.Variant }).ConfigureAwait(false);
+
+            bool flashlight = JArray.Parse(score.Mods).Any(m => (string?)m["acronym"] == "FL");
+
+            if (limit == null || !limit.IsExceededBy(pp, flashlight))
+                return false;
+
+            int whitelisted = await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM whitelist WHERE user_id = @userId AND (modes & (1 << @bit)) <> 0",
+                new { userId = score.UserId, bit = PpLimit.WhitelistBit(score.RulesetId, score.Variant) }).ConfigureAwait(false);
+
+            if (whitelisted > 0)
+                return false;
+
+            if (Settings.VerifiedBadgeId > 0)
+            {
+                int verified = await connection.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM user_badges WHERE `user` = @userId AND badge = @badge",
+                    new { userId = score.UserId, badge = Settings.VerifiedBadgeId }).ConfigureAwait(false);
+
+                if (verified > 0)
+                    return false;
+            }
+
+            return true;
         }
 
         private static async Task recalculateStatusesAsync(MySqlConnection connection, string table, int userId, int mode)

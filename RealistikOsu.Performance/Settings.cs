@@ -8,6 +8,11 @@ namespace RealistikOsu.Performance
 
         public static string BeatmapBaseUrl => get("OSU_BEATMAP_BASE_URL", "https://old.ppy.sh/osu");
 
+        /// <summary>
+        /// Players with this badge may go over the pp cap, like <c>SERVER_VERIFIED_BADGE_ID</c> on the score servers. 0 for none.
+        /// </summary>
+        public static int VerifiedBadgeId => int.Parse(get("VERIFIED_BADGE_ID", "0"));
+
         public static string ApiHost => get("API_HOST", "127.0.0.1");
 
         public static int ApiPort => int.Parse(get("API_PORT", "8080"));
