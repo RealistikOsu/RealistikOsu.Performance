@@ -41,7 +41,7 @@ namespace RealistikOsu.Performance.Queue
             var stableOwner = await recalculator.RecalculateScoreAsync(item.Table, item.ScoreId).ConfigureAwait(false);
 
             if (stableOwner != null)
-                await recalculator.RecalculateUserAsync(stableOwner.UserId, stableOwner.Mode, stableOwner.Variant).ConfigureAwait(false);
+                await recalculator.RecalculateUserAsync(stableOwner.UserId, stableOwner.Mode, stableOwner.Variant, stableOwner.BeatmapMd5).ConfigureAwait(false);
         }
     }
 }

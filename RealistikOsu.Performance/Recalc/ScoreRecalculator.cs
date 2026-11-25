@@ -54,7 +54,7 @@ namespace RealistikOsu.Performance.Recalc
                 return null;
 
             await RecalculateScoreAsync(table, score).ConfigureAwait(false);
-            return new ScoreOwner(score.UserId, score.PlayMode, rx);
+            return new ScoreOwner(score.UserId, score.PlayMode, rx, score.BeatmapMd5);
         }
 
         public async Task RecalculateScoreAsync(string table, StableScore score)
@@ -164,14 +164,15 @@ namespace RealistikOsu.Performance.Recalc
         /// <summary>
         /// Settles which of the player's scores on each map is their best, then rebuilds their pp and leaderboard places.
         /// </summary>
-        public async Task RecalculateUserAsync(int userId, int mode, int rx)
+        /// <param name="beatmapMd5">Settles only this map's best play, for when one score changed. Null settles every map.</param>
+        public async Task RecalculateUserAsync(int userId, int mode, int rx, string? beatmapMd5 = null)
         {
             string table = Variants.ScoresTable(rx);
             string prefix = Variants.StatsPrefix(mode);
 
             using var connection = await DatabaseAccess.GetConnectionAsync().ConfigureAwait(false);
 
-            await recalculateStatusesAsync(connection, table, userId, mode).ConfigureAwait(false);
+            await recalculateStatusesAsync(connection, table, userId, mode, beatmapMd5).ConfigureAwait(false);
 
             var topPp = (await connection.QueryAsync<double>(
                 $@"SELECT COALESCE(s.pp, 0) FROM {table} s INNER JOIN beatmaps b USING(beatmap_md5)
@@ -303,14 +304,15 @@ namespace RealistikOsu.Performance.Recalc
             return true;
         }
 
-        private static async Task recalculateStatusesAsync(MySqlConnection connection, string table, int userId, int mode)
+        private static async Task recalculateStatusesAsync(MySqlConnection connection, string table, int userId, int mode, string? beatmapMd5)
         {
             // A dodge the beat map has its own rule for the best play, which the score servers apply.
             var scores = await connection.QueryAsync<StatusRow>(
                 $@"SELECT s.id AS Id, s.beatmap_md5 AS BeatmapMd5, s.completed AS Completed FROM {table} s
                 WHERE s.userid = @userId AND s.play_mode = @mode AND s.completed IN (2, 3)
+                AND (@beatmapMd5 IS NULL OR s.beatmap_md5 = @beatmapMd5)
                 AND NOT EXISTS (SELECT 1 FROM beatmaps b WHERE b.beatmap_md5 = s.beatmap_md5 AND b.dodge_the_beat = 1)
-                ORDER BY s.beatmap_md5, s.pp DESC, s.id", new { userId, mode }).ConfigureAwait(false);
+                ORDER BY s.beatmap_md5, s.pp DESC, s.id", new { userId, mode, beatmapMd5 }).ConfigureAwait(false);
 
             var bests = new List<long>();
             var others = new List<long>();

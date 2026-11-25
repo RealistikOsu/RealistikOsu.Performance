@@ -10,7 +10,7 @@ namespace RealistikOsu.Performance.Data
             s.`300_count` AS Count300, s.`100_count` AS Count100, s.`50_count` AS Count50,
             s.katus_count AS CountKatu, s.gekis_count AS CountGeki, s.misses_count AS CountMiss,
             s.play_mode AS PlayMode, s.completed AS Completed, COALESCE(s.pp, 0) AS Pp, b.beatmap_id AS BeatmapId,
-            b.dodge_the_beat AS DodgeTheBeat";
+            s.beatmap_md5 AS BeatmapMd5, b.dodge_the_beat AS DodgeTheBeat";
 
         public long Id { get; set; }
 
@@ -43,6 +43,8 @@ namespace RealistikOsu.Performance.Data
         public double Pp { get; set; }
 
         public int BeatmapId { get; set; }
+
+        public string BeatmapMd5 { get; set; } = string.Empty;
 
         /// <summary>
         /// A catch map played by avoiding every object. It ranks by how much was avoided and never awards pp, so the
