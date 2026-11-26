@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using osu.Game.Beatmaps;
@@ -28,7 +29,7 @@ namespace RealistikOsu.Performance.Calculation
         public async Task<PlayResult> CalculateAsync(PlayInput input)
         {
             var ruleset = Rulesets.ById(input.RulesetId);
-            var file = await beatmaps.GetAsync(input.BeatmapId).ConfigureAwait(false);
+            var file = await beatmaps.GetAsync(input.BeatmapId, input.BeatmapMd5).ConfigureAwait(false);
 
             DifficultyAttributes attributes = input.PassedObjects is { } passed
                 ? await Task.Run(() => difficultyAtObject(ruleset.CreateDifficultyCalculator(file.Working), input.Mods, passed)).ConfigureAwait(false)
@@ -42,6 +43,15 @@ namespace RealistikOsu.Performance.Calculation
             var statistics = input.Statistics != null
                 ? HitStatistics.Complete(input.Statistics, maximum)
                 : HitStatistics.FromAccuracy(input.RulesetId, maximum, input.Accuracy, input.Misses, input.PassedObjects);
+
+            // Only osu! is held to this, as converted maps can differ from stable by a few objects.
+            if (input.RulesetId == 0)
+            {
+                int judged = new[] { HitResult.Great, HitResult.Ok, HitResult.Meh, HitResult.Miss }.Sum(r => statistics.GetValueOrDefault(r));
+
+                if (judged > maximum[HitResult.Great])
+                    throw new InvalidOperationException($"A play of beatmap {input.BeatmapId} has {judged} judgements but the map has {maximum[HitResult.Great]} objects.");
+            }
 
             var score = new ScoreInfo(file.Working.BeatmapInfo, ruleset.RulesetInfo)
             {

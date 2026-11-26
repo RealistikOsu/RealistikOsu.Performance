@@ -8,6 +8,11 @@ namespace RealistikOsu.Performance.Calculation
     {
         public required int BeatmapId { get; init; }
 
+        /// <summary>
+        /// The MD5 of the map version that was played, when known.
+        /// </summary>
+        public string? BeatmapMd5 { get; init; }
+
         public required int RulesetId { get; init; }
 
         public required Mod[] Mods { get; init; }

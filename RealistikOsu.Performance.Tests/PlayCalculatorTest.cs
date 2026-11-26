@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using osu.Game.Rulesets.Osu.Difficulty;
 using osu.Game.Rulesets.Osu.Difficulty.Relax;
+using osu.Game.Rulesets.Scoring;
 using RealistikOsu.Performance.Beatmaps;
 using RealistikOsu.Performance.Calculation;
 
@@ -80,6 +82,22 @@ namespace RealistikOsu.Performance.Tests
             var missed = await calculate(0, 0, 98, 5);
 
             Assert.That(missed.Pp, Is.LessThan(clean.Pp));
+        }
+
+        [TestCase(0)]
+        [TestCase(1 << 7)]
+        public void TestMoreJudgementsThanObjectsIsRefused(int bits)
+        {
+            var input = new PlayInput
+            {
+                BeatmapId = 1,
+                RulesetId = 0,
+                Mods = ModFactory.Create(Rulesets.ById(0), bits, null, null, true),
+                MaxCombo = 100,
+                Statistics = new Dictionary<HitResult, int> { [HitResult.Great] = 400 },
+            };
+
+            Assert.ThrowsAsync<InvalidOperationException>(() => calculator.CalculateAsync(input));
         }
 
         [Test]

@@ -36,13 +36,33 @@ namespace RealistikOsu.Performance.Beatmaps
 
         public string PathOf(int beatmapId) => Path.Combine(root, $"{beatmapId}.osu");
 
-        /// <exception cref="HttpRequestException">The map isn't on disk and couldn't be fetched.</exception>
-        public async Task<BeatmapFile> GetAsync(int beatmapId)
+        /// <param name="beatmapId">The map to get.</param>
+        /// <param name="checksum">The MD5 of the version that is needed. Null takes whichever is on disk.</param>
+        /// <exception cref="HttpRequestException">The map, or the needed version of it, couldn't be fetched.</exception>
+        public async Task<BeatmapFile> GetAsync(int beatmapId, string? checksum = null)
         {
             string path = PathOf(beatmapId);
 
             await ensureOnDiskAsync(path, beatmapId).ConfigureAwait(false);
 
+            BeatmapFile file = await readAsync(path, beatmapId).ConfigureAwait(false);
+
+            if (checksum == null || matches(file.Checksum, checksum))
+                return file;
+
+            // The map was updated after its file was fetched.
+            await downloadOnceAsync(path, beatmapId, checksum).ConfigureAwait(false);
+            file = await readAsync(path, beatmapId).ConfigureAwait(false);
+
+            // A download of another version may have been running already.
+            if (!matches(file.Checksum, checksum))
+                throw new HttpRequestException($"The .osu of beatmap {beatmapId} isn't the version {checksum}.");
+
+            return file;
+        }
+
+        private async Task<BeatmapFile> readAsync(string path, int beatmapId)
+        {
             var info = new System.IO.FileInfo(path);
             string stamp = $"{beatmapId}:{info.Length}:{info.LastWriteTimeUtc.Ticks}";
 
@@ -79,17 +99,17 @@ namespace RealistikOsu.Performance.Beatmaps
         /// <exception cref="HttpRequestException">The map isn't on disk and couldn't be fetched.</exception>
         public Task EnsureOnDiskAsync(int beatmapId) => ensureOnDiskAsync(PathOf(beatmapId), beatmapId);
 
-        private Task ensureOnDiskAsync(string path, int beatmapId)
-        {
-            if (isUsable(path))
-                return Task.CompletedTask;
+        private Task ensureOnDiskAsync(string path, int beatmapId) =>
+            isUsable(path) ? Task.CompletedTask : downloadOnceAsync(path, beatmapId, null);
 
+        private Task downloadOnceAsync(string path, int beatmapId, string? checksum)
+        {
             // The download runs as a task of its own, so a caller that goes away doesn't cancel it for the others.
             return downloads.GetOrAdd(beatmapId, _ => new Lazy<Task>(() => Task.Run(async () =>
             {
                 try
                 {
-                    await downloadAsync(path, beatmapId).ConfigureAwait(false);
+                    await downloadAsync(path, beatmapId, checksum).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -98,9 +118,9 @@ namespace RealistikOsu.Performance.Beatmaps
             }))).Value;
         }
 
-        private async Task downloadAsync(string path, int beatmapId)
+        private async Task downloadAsync(string path, int beatmapId, string? checksum)
         {
-            if (isUsable(path))
+            if (checksum == null && isUsable(path))
                 return;
 
             Console.WriteLine($"downloading .osu for beatmap {beatmapId}");
@@ -109,6 +129,10 @@ namespace RealistikOsu.Performance.Beatmaps
 
             if (bytes.Length == 0)
                 throw new HttpRequestException($"Empty .osu received for beatmap {beatmapId}.");
+
+            // Another version doesn't replace the file, which may be one that was put there by hand.
+            if (checksum != null && !matches(Convert.ToHexString(MD5.HashData(bytes)), checksum))
+                throw new HttpRequestException($"The .osu received for beatmap {beatmapId} isn't the version {checksum}.");
 
             // Written under its own name and moved into place, so a crash can't leave a cut-off file behind.
             string partial = $"{path}.{Guid.NewGuid():N}.part";
@@ -123,6 +147,8 @@ namespace RealistikOsu.Performance.Beatmaps
                 File.Delete(partial);
             }
         }
+
+        private static bool matches(string actual, string expected) => actual.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
         private static bool isUsable(string path) => File.Exists(path) && new System.IO.FileInfo(path).Length > 0;
 

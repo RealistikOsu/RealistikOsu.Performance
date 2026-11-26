@@ -70,6 +70,7 @@ namespace RealistikOsu.Performance.Recalc
                 var result = await calculator.CalculateAsync(new PlayInput
                 {
                     BeatmapId = score.BeatmapId,
+                    BeatmapMd5 = score.BeatmapMd5,
                     RulesetId = score.PlayMode,
                     Mods = ModFactory.Create(ruleset, score.Mods, score.ModsJson, score.PlaybackRate, true),
                     MaxCombo = score.MaxCombo,
@@ -134,6 +135,7 @@ namespace RealistikOsu.Performance.Recalc
             var calculation = await calculator.CalculateAsync(new PlayInput
             {
                 BeatmapId = score.BeatmapId,
+                BeatmapMd5 = score.BeatmapMd5,
                 RulesetId = score.RulesetId,
                 Mods = mods,
                 MaxCombo = score.MaxCombo,
